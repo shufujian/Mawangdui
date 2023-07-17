@@ -1,8 +1,20 @@
+# %% --------------------------------------- Load Packages -------------------------------------------------------------
+import numpy as np
+from numpy import cov
+from numpy import trace
+from numpy import iscomplexobj
+from numpy import asarray
+from numpy.random import shuffle
+from scipy.linalg import sqrtm
+from tensorflow.keras.applications.inception_v3 import InceptionV3
+from tensorflow.keras.applications.inception_v3 import preprocess_input
+from tensorflow.keras.models import load_model
+from skimage.transform import resize
+
 import os
 import random
 import cv2
 import tensorflow as tf
-import numpy as np
 import matplotlib.pyplot as plt
 import tensorflow.keras.backend as K
 from tensorflow.keras import Model, Sequential
@@ -14,51 +26,8 @@ from tensorflow.keras.initializers import glorot_normal
 from tensorflow.keras.optimizers import Adam
 from sklearn.model_selection import train_test_split
 
-SEED = 42
-os.environ['PYTHONHASHSEED'] = str(SEED)
-random.seed(SEED)
-np.random.seed(SEED)
-tf.random.set_seed(SEED)
-weight_init = glorot_normal(seed=SEED)
 
-def change_image_shape(images):
-    shape_tuple = images.shape
-    if len(shape_tuple) == 3:
-        images = images.reshape(-1, shape_tuple[-1], shape_tuple[-1], 1)
-    elif shape_tuple == 4 and shape_tuple[-1] > 3:
-        images = images.reshape(-1, shape_tuple[-1], shape_tuple[-1], shape_tuple[1])
-    return images
-
-images = np.load('./data/x_train.npy')
-labels = np.load('./data/y_train.npy')
-name_l = np.load('./data/label.npy')
-
-# 1、读取数据-----------------------------------------------------------------------------------------
-images = change_image_shape(images)
-
-channel = images.shape[-1]
-real = np.ndarray(shape=(images.shape[0], 64, 64, channel))
-for i in range(images.shape[0]):
-    real[i] = cv2.resize(images[i], (64, 64)).reshape((64, 64, channel))
-
-# Train test split, for autoencoder (actually, this step is redundant if we already have test set)
-x_train, x_test, y_train, y_test = train_test_split(real, labels, test_size=0.3, shuffle=True, random_state=42)
-
-# It is suggested to use [-1, 1] input for GAN training
-x_train = (x_train.astype('float32') - 127.5) / 127.5
-x_test = (x_test.astype('float32') - 127.5) / 127.5
-
-# Get image size
-img_size = x_train[0].shape
-# print(img_size)
-# Get number of classes
-n_classes = len(np.unique(y_train))
-
-
-optimizer = Adam(lr=0.0002, beta_1=0.5, beta_2=0.9)
-latent_dim=128
-# trainRatio === times(Train D) / times(Train G)
-trainRatio = 5
+from PIL import Image
 
 # Build Generator/Decoder
 def decoder():
@@ -169,46 +138,6 @@ def autoencoder_trainer(encoder, decoder, embedding):
 
     model.compile(optimizer=optimizer, loss='mae')
     return model
-
-en = encoder()
-de = decoder()
-em = embedding_labeled_latent()
-ae = autoencoder_trainer(en, de, em)
-
-ae.fit([x_train, y_train], x_train,
-       epochs=100,
-       batch_size=4,
-       shuffle=True,
-       validation_data=([x_test, y_test], x_test))
-
-decoded_imgs = ae.predict([x_test, y_test])
-n = n_classes
-plt.figure(figsize=(2*n, 4))
-decoded_imgs = decoded_imgs*0.5 + 0.5
-x_real = x_test*0.5 + 0.5
-
-for i in range(n):
-    # display original
-    ax = plt.subplot(2, n, i+1)
-    if len(x_real[y_test==i])==0:
-        continue
-    if channel == 3:
-        plt.imshow(cv2.cvtColor(x_test[y_test==i][0].reshape(64, 64, channel),cv2.COLOR_BGR2RGB))
-    else:
-        plt.imshow(x_real[y_test==i][0].reshape(64, 64))
-        plt.gray()
-    ax.get_xaxis().set_visible(False)
-    ax.get_yaxis().set_visible(False)
-    # display reconstruction
-    ax = plt.subplot(2, n, i + n + 1)
-    if channel == 3:
-        plt.imshow(cv2.cvtColor(decoded_imgs[y_test==i][0].reshape(64, 64, channel),cv2.COLOR_BGR2RGB))
-    else:
-        plt.imshow(decoded_imgs[y_test==i][0].reshape(64, 64))
-        plt.gray()
-    ax.get_xaxis().set_visible(False)
-    ax.get_yaxis().set_visible(False)
-plt.show()
 
 class BAGAN_GP(Model):
     def __init__(
@@ -384,89 +313,129 @@ def build_discriminator(encoder):
 
     return model
 
+number = 4
+# images = np.load('./input/mwd/97/x_train.npy')
+# labels = np.load('./input/mwd/97/y_train.npy')
+name_l = np.load('./data/label.npy')
+
+img_size = (64,64,3)
+latent_dim=128
+n_classes = len(name_l)
+channel = 3
+optimizer = Adam(lr=0.0002, beta_1=0.5, beta_2=0.9)
+trainRatio = 5
+# load generator
+# gen_path = './model_data/model_卷一_97.h5'
+
+
+en = encoder()
+de = decoder()
+em = embedding_labeled_latent()
+ae = autoencoder_trainer(en, de, em)
+
+generator_optimizer = Adam(
+    learning_rate=0.001, beta_1=0.5, beta_2=0.9
+)
+discriminator_optimizer = Adam(
+    learning_rate=0.001, beta_1=0.5, beta_2=0.9
+)
+
 d_model = build_discriminator(en)  # initialized with Encoder
 # d_model = discriminator_cwgan()  # without initialization
 g_model = generator_label(em, de)  # initialized with Decoder and Embedding
 
-bagan_gp = BAGAN_GP(
+bagan = BAGAN_GP(
     discriminator=d_model,
     generator=g_model,
     latent_dim=latent_dim,
     discriminator_extra_steps=3,
 )
 
-# Compile the model
-bagan_gp.compile(
-    d_optimizer=discriminator_optimizer,
-    g_optimizer=generator_optimizer,
-    g_loss_fn=generator_loss,
-    d_loss_fn=discriminator_loss,
-)
+bagan.load_weights('./model_data/model.h5')
 
-def plt_img(generator, epoch):
-    np.random.seed(42)
-    latent_gen = np.random.normal(size=(1, latent_dim))
+# %% --------------------------------------- Define FID ----------------------------------------------------------------
+# Reference: https://machinelearningmastery.com/how-to-implement-the-frechet-inception-distance-fid-from-scratch/
+# calculate frechet inception distance
+def calculate_fid(model, images1, images2):
+    # calculate activations
+    act1 = model.predict(images1)
+    act2 = model.predict(images2)
+    # calculate mean and covariance statistics
+    mu1, sigma1 = act1.mean(axis=0), cov(act1, rowvar=False)
+    mu2, sigma2 = act2.mean(axis=0), cov(act2, rowvar=False)
+    # calculate sum squared difference between means
+    ssdiff = np.sum((mu1 - mu2) ** 2.0)
+    # calculate sqrt of product between cov
+    covmean = sqrtm(sigma1.dot(sigma2))
+    # check and correct imaginary numbers from sqrt
+    if iscomplexobj(covmean):
+        covmean = covmean.real
+    # calculate score
+    fid = ssdiff + trace(sigma1 + sigma2 - 2.0 * covmean)
+    return fid
 
-    x_real = x_test * 0.5 + 0.5
-    n = n_classes
+# prepare the inception v3 model
+model = InceptionV3(include_top=False, pooling='avg', input_shape=(299,299,3))
 
-    plt.figure(figsize=(2*n, 2*(1+1)))
-    for i in range(n):
-        # display original
-        ax = plt.subplot(2, n, i + 1)
-        if channel == 3:
-            plt.imshow(cv2.cvtColor(x_real[y_test==i][0].reshape(64, 64, channel),cv2.COLOR_BGR2RGB))
-        else:
-            plt.imshow(x_real[y_test == i][0].reshape(64, 64))
-            plt.gray()
-        ax.get_xaxis().set_visible(False)
-        ax.get_yaxis().set_visible(False)
-        for c in range(1):
-            decoded_imgs = generator.predict([latent_gen, np.ones(1)*i])
-            decoded_imgs = decoded_imgs * 0.5 + 0.5
-            # display generation
-            ax = plt.subplot(2, n, n+i+1)
-            if channel == 3:
-                plt.imshow(cv2.cvtColor(decoded_imgs[0].reshape(64, 64, channel),cv2.COLOR_BGR2RGB))
-            else:
-                plt.imshow(decoded_imgs[i].reshape(64, 64))
-                plt.gray()
-            ax.get_xaxis().set_visible(False)
-            ax.get_yaxis().set_visible(False)
-    plt.savefig('bagan_gp_results/generated_plot_%d.png' % epoch)
-    plt.show()
-    return
+# %% --------------------------------------- Calculate FID for Generator -----------------------------------------------
+# scale an array of images to a new size
+# Note: skimage will automatically change image range into [0, 1] after resizing
+def scale_images(images, new_shape):
+    images_list = list()
+    for image in images:
+        # resize with nearest neighbor interpolation
+        new_image = resize(image, new_shape, 0)*255
+        # store
+        images_list.append(new_image)
+    return asarray(images_list)
 
-# make directory to store results
-os.system('mkdir -p bagan_gp_results')
 
-print('hhaa')
-# Record the loss
-d_loss_history = []
-g_loss_history = []
+# load generator
+# gen_path = './model_data/model.h5'
+generator = bagan.generator
 
-LEARNING_STEPS = 100
+# load real images from validation set
+real_imgs = np.load('./data/x_val.npy')
+real_label = np.load('./data/y_val.npy')
 
-    #训练model的代码
-for learning_step in range(LEARNING_STEPS):
-    print('LEARNING STEP # ', learning_step + 1, '-' * 50)
-    bagan_gp.fit(x_train, y_train, batch_size=64, epochs=2)
-    d_loss_history += bagan_gp.history.history['d_loss']
-    g_loss_history += bagan_gp.history.history['g_loss']
-    if (learning_step+1)%1 == 0:
-        plt_img(bagan_gp.generator, learning_step)
+# calculate FID for each class
+n_classes = len(np.unique(real_label))
+sample_size = 1000
+for c in range(n_classes):
+    ########### get generated samples by class ###########
+    label = np.ones(sample_size) * c
+    noise = np.random.normal(0, 1, (sample_size, generator.input_shape[0][1]))
+    print('Latent dimension:', generator.input_shape[0][1])
+    gen_samples = generator.predict([noise, label])
+    gen_samples = gen_samples*0.5 + 0.5
 
-        
-# save gif
-import imageio
-ims = []
-for i in range(LEARNING_STEPS):
-    fname = 'generated_plot_%d.png' % i
-    dir = 'bagan_gp_results/'
-    if fname in os.listdir(dir):
-        print('loading png...', i)
-        im = imageio.imread(dir + fname, 'png')
-        ims.append(im)
-print('saving as gif...')
-imageio.mimsave(dir + 'training_demo.gif', ims, fps=3)
-bagan_gp.save_weights('model_data/model.h5')
+    ########### load real samples from training set ###########
+    # gen_samples = np.load('./data/x_train.npy')
+    # gen_label = np.load('./data/y_train.npy')
+    # gen_samples = gen_samples[gen_label == c]
+    # # shuffle(gen_samples)
+    # gen_samples = gen_samples[:1000].astype('float32') / 255.
+
+    ########### get real samples by class ###########
+    real_samples = real_imgs[real_label == c]
+    # shuffle(real_imgs)  # shuffle it or not
+    # real_samples = real_samples[:1000]  # less calculation
+    real_samples = real_samples.astype('float32') / 255.
+
+    # resize images
+    gen_samples = scale_images(gen_samples, (299,299,3))
+    real_samples = scale_images(real_samples, (299,299,3))
+    print('Scaled', gen_samples.shape, real_samples.shape)
+    print('Scaled range for generated', np.min(gen_samples[0]), np.max(gen_samples[0]))
+    print('Scaled range for real', np.min(real_samples[0]), np.max(real_samples[0]))
+
+    # preprocess images
+    gen_samples = preprocess_input(gen_samples)
+    real_samples = preprocess_input(real_samples)
+    print('Scaled range for generated', np.min(gen_samples[0]), np.max(gen_samples[0]))
+    print('Scaled range for real', np.min(real_samples[0]), np.max(real_samples[0]))
+
+    # calculate fid
+    fid = calculate_fid(model, gen_samples, real_samples)
+    print('>>FID(%d): %.3f' % (c, fid))
+    print('-'*50)

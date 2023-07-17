@@ -1,33 +1,23 @@
 # %% --------------------------------------- Load Packages -------------------------------------------------------------
-import numpy as np
-from numpy import cov
-from numpy import trace
-from numpy import iscomplexobj
-from numpy import asarray
-from numpy.random import shuffle
-from scipy.linalg import sqrtm
-from tensorflow.keras.applications.inception_v3 import InceptionV3
-from tensorflow.keras.applications.inception_v3 import preprocess_input
-from tensorflow.keras.models import load_model
-from skimage.transform import resize
-
-import numpy as np
-from numpy import cov
-from numpy import trace
-from numpy import iscomplexobj
-from numpy import asarray
-from numpy.random import shuffle
-from scipy.linalg import sqrtm
-from tensorflow.keras.applications.inception_v3 import InceptionV3
-from tensorflow.keras.applications.inception_v3 import preprocess_input
-from tensorflow.keras.models import load_model
-
 import os
 import random
-import cv2
-import tensorflow as tf
 import numpy as np
+import cv2
+from numpy import cov
+from numpy import trace
+from numpy import iscomplexobj
+from numpy import asarray
+from numpy.random import shuffle
+import tensorflow as tf
 import matplotlib.pyplot as plt
+from scipy.linalg import sqrtm
+from sklearn.manifold import TSNE
+from tensorflow.keras.models import load_model
+from tensorflow.keras.models import Model
+from tensorflow.keras.layers import GlobalAveragePooling2D
+from tensorflow.keras.applications import ResNet50, imagenet_utils
+from tensorflow.keras.applications.inception_v3 import InceptionV3
+from tensorflow.keras.applications.inception_v3 import preprocess_input
 import tensorflow.keras.backend as K
 from tensorflow.keras import Model, Sequential
 from tensorflow.keras.initializers import RandomNormal
@@ -365,89 +355,88 @@ bagan = BAGAN_GP(
 
 bagan.load_weights('./model_data/model.h5')
 
-# %% --------------------------------------- Define FID ----------------------------------------------------------------
-# Reference: https://machinelearningmastery.com/how-to-implement-the-frechet-inception-distance-fid-from-scratch/
-# calculate frechet inception distance
-def calculate_fid(model, images1, images2):
-    # calculate activations
-    act1 = model.predict(images1)
-    act2 = model.predict(images2)
-    # calculate mean and covariance statistics
-    mu1, sigma1 = act1.mean(axis=0), cov(act1, rowvar=False)
-    mu2, sigma2 = act2.mean(axis=0), cov(act2, rowvar=False)
-    # calculate sum squared difference between means
-    ssdiff = np.sum((mu1 - mu2) ** 2.0)
-    # calculate sqrt of product between cov
-    covmean = sqrtm(sigma1.dot(sigma2))
-    # check and correct imaginary numbers from sqrt
-    if iscomplexobj(covmean):
-        covmean = covmean.real
-    # calculate score
-    fid = ssdiff + trace(sigma1 + sigma2 - 2.0 * covmean)
-    return fid
+# %% --------------------------------------- Set-Up --------------------------------------------------------------------
+SEED = 42
+os.environ['PYTHONHASHSEED'] = str(SEED)
+random.seed(SEED)
+np.random.seed(SEED)
+tf.random.set_seed(SEED)
 
-# prepare the inception v3 model
-model = InceptionV3(include_top=False, pooling='avg', input_shape=(299,299,3))
+# %% -------------------------------------- Data Prep ------------------------------------------------------------------
+x, y = np.load('./data/x_train.npy')[:1000], np.load('./data/y_train.npy')[:1000]
 
-# %% --------------------------------------- Calculate FID for Generator -----------------------------------------------
-# scale an array of images to a new size
-# Note: skimage will automatically change image range into [0, 1] after resizing
-def scale_images(images, new_shape):
-    images_list = list()
-    for image in images:
-        # resize with nearest neighbor interpolation
-        new_image = resize(image, new_shape, 0)*255
-        # store
-        images_list.append(new_image)
-    return asarray(images_list)
+n_classes = len(np.unique(y))
+inputShape = x[0].shape
+print(x[0].shape,'abcabcabcabc',inputShape)
 
-
-# load generator
-# gen_path = './model_data/model.h5'
+# GAN based augmentation
+gen_path = './model_data/model.h5'
 generator = bagan.generator
+# augmented sample size
+aug_size = 100
 
-# load real images from validation set
-real_imgs = np.load('./data/x_val.npy')
-real_label = np.load('./data/y_val.npy')
-
-# calculate FID for each class
-n_classes = len(np.unique(real_label))
-sample_size = 1000
 for c in range(n_classes):
-    ########### get generated samples by class ###########
+    sample_size = aug_size
     label = np.ones(sample_size) * c
     noise = np.random.normal(0, 1, (sample_size, generator.input_shape[0][1]))
     print('Latent dimension:', generator.input_shape[0][1])
-    gen_samples = generator.predict([noise, label])
-    gen_samples = gen_samples*0.5 + 0.5
+    gen_sample = generator.predict([noise, label])
+    gen_imgs = (gen_sample*0.5 + 0.5)*255
+    x = np.append(x, gen_imgs, axis=0)
+    y = np.append(y, label)
+    print('Augmented dataset size:', sample_size, 'Total dataset size:', len(y))
 
-    ########### load real samples from training set ###########
-    # gen_samples = np.load('./data/x_train.npy')
-    # gen_label = np.load('./data/y_train.npy')
-    # gen_samples = gen_samples[gen_label == c]
-    # # shuffle(gen_samples)
-    # gen_samples = gen_samples[:1000].astype('float32') / 255.
+x_train, y_train = x, y
 
-    ########### get real samples by class ###########
-    real_samples = real_imgs[real_label == c]
-    # shuffle(real_imgs)  # shuffle it or not
-    # real_samples = real_samples[:1000]  # less calculation
-    real_samples = real_samples.astype('float32') / 255.
+x_test, y_test = np.load('./data/x_val.npy'), np.load('./data/y_val.npy')
 
-    # resize images
-    gen_samples = scale_images(gen_samples, (299,299,3))
-    real_samples = scale_images(real_samples, (299,299,3))
-    print('Scaled', gen_samples.shape, real_samples.shape)
-    print('Scaled range for generated', np.min(gen_samples[0]), np.max(gen_samples[0]))
-    print('Scaled range for real', np.min(real_samples[0]), np.max(real_samples[0]))
+preprocess = imagenet_utils.preprocess_input
+x_train = preprocess(x_train)
+x_test = preprocess(x_test)
 
-    # preprocess images
-    gen_samples = preprocess_input(gen_samples)
-    real_samples = preprocess_input(real_samples)
-    print('Scaled range for generated', np.min(gen_samples[0]), np.max(gen_samples[0]))
-    print('Scaled range for real', np.min(real_samples[0]), np.max(real_samples[0]))
+# %% -------------------------------------- Model Setup ----------------------------------------------------------------
 
-    # calculate fid
-    fid = calculate_fid(model, gen_samples, real_samples)
-    print('>>FID(%d): %.3f' % (c, fid))
-    print('-'*50)
+# Get the feature output from the pre-trained model ResNet50
+pretrained_model = ResNet50(include_top=False, input_shape=inputShape, weights="imagenet")
+for layer in pretrained_model.layers:
+    layer.trainable = False
+x = pretrained_model.layers[-1].output
+x = GlobalAveragePooling2D()(x)
+feature_model = Model(pretrained_model.input, x)
+print('aaaaaaaaaaaaaaaaaa',pretrained_model.input)
+
+# %% -------------------------------------- TSNE Visualization ---------------------------------------------------------
+def tsne_plot(encoder):
+    "Creates and TSNE model and plots it"
+    plt.figure(figsize=(8, 8))
+    color = plt.get_cmap('tab10')
+
+    latent = encoder.predict(x_train)
+
+    # latent = embedding.predict([latent, y_train])
+    tsne_model = TSNE(n_components=2, init='random', random_state=0)
+    new_values = tsne_model.fit_transform(latent)
+    x = []
+    y = []
+    for value in new_values:
+        x.append(value[0])
+        y.append(value[1])
+    x = np.array(x)
+    y = np.array(y)
+    x_real = x[:-4 * aug_size]
+    y_real = y[:-4 * aug_size]
+    x_generated = x[-4 * aug_size:]
+    y_generated = y[-4 * aug_size:]
+    real_label = y_train[:-4 * aug_size]
+    generated_label = y_train[-4 * aug_size:]
+    loop = 0
+    markers = ['o', 'x']
+    for x, y, l in [(x_real, y_real, real_label), (x_generated, y_generated, generated_label)]:
+        marker = markers[loop]
+        loop += 1
+        for c in range(n_classes):
+            plt.scatter(x[l == c], y[l == c], marker=marker, c=np.array([color(c)]), label='%d' % c)
+    plt.legend()
+    plt.show()
+
+tsne_plot(feature_model)
