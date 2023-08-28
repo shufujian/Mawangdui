@@ -19,13 +19,13 @@ Mawangdui:
 
 ## The process for creating this dataset
 The wood slips, bamboo slips, and silk manuscripts found in Changsha's Mawangdui Han Tomb had serious problems, including severe damage, the disappearance of text handwriting, corrosion, and darkening of old books.
-![帛书图片](README.assets/帛书原图.jpg)
+![fig_3](README.assets/fig_3.jpg)
 
 So "Mawangdui bamboo and silk word the whole series (full 3)" was chosen as the basis for making the dataset.The content pictures are shown below:
-![全字编图片](README.assets/全字编.jpg)
+![fig_4](README.assets/fig_4.jpg)
 
 Get all single Chinese character images by deep learning method. Finally the final dataset is obtained by manual sorting.
-![单字图片](README.assets/单字图片.jpg)
+![fig_5](README.assets/fig_5.jpg)
 
 ## character data
 This folder contains all thef the original dataset.
@@ -35,8 +35,8 @@ This folder contains all thef the original dataset.
 >
 >The category of the dataset is a **Chinese character**, but some Chinese characters do not **exist** now.
 
-![单字图片](README.assets/单字图片.png)
-![单字图片](README.assets/单字图片.jpg)
+![fig_1](README.assets/fig_1.png)
+![fig_5](README.assets/fig_5.jpg)
 
 
 
@@ -50,7 +50,7 @@ Used to expand the dataset.
 
 The output images is shown below.
 
-<img src="README.assets/生成图片_2.png" alt="生成图片_2" style="zoom:50%;" />
+<img src="README.assets/fig_2.png" alt="fig_2" style="zoom:50%;" />
 
 > You can visit the [Original Repository](https://github.com/GH920/improved-bagan-gp) for more detailed information.
 
